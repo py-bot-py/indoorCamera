@@ -1,0 +1,29 @@
+services:
+  frigate:
+    container_name: frigate
+    restart: unless-stopped
+    stop_grace_period: 30s
+    image: ghcr.io/blakeblackshear/frigate:stable
+    shm_size: "256mb"
+    volumes:
+      - ./config:/config
+      - /media/seagate/frigate:/media/frigate
+      - type: tmpfs # 1GB In-memory filesystem for recording segment storage
+        target: /tmp/cache
+        tmpfs:
+          size: 1000000000
+    ports:
+      - "5000:5000"
+      - "8971:8971"
+      - "8554:8554" # RTSP feeds
+    environment:
+      FRIGATE_RTSP_PASSWORD: "Jimmys!Secure&Cameras"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.myheimdall.rule=Host(`heimdall.example.com`)
+      - traefik.http.services.myheimdall.loadbalancer.server.port=443
+      - traefik.http.services.myheimdall.loadbalancer.server.scheme=https
+      - traefik.http.routers.myheimdall.middlewares=myauth
+      - traefik.http.middlewares.myauth.basicauth.users=test:$$apr1$$H6uskkkW$$IgXLP6ewTrSuBkTrqE8wj/
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
