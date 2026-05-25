@@ -1,38 +1,39 @@
 import socket
 import struct
 import subprocess
-import sys
 import threading
+import time
 
 # --- Configuration ---
-TCP_IP = '0.0.0.0'       # Listen on all interfaces
-ports = [1239, 1240, 1241, 1242, 1243, 1244, 1245]         # Port matching your ESP32
-# Replace with your MediaMTX server IP/Port if not running locally
-mediaMTXHost = 'rtsp://192.168.100.150:8554/'
+TCP_IP = '0.0.0.0'
+ports = [1239, 1240, 1241, 1242, 1243, 1244, 1245]
 
+mediaMTXHost = 'rtsp://192.168.100.150:8554/'
 streams = ['IceCream1', 'IceCream2', 'IceCream3', 'Cafe1', 'Cafe2', 'Cafe3', 'Stairway']
 
 urls = [f'{mediaMTXHost}{stream}' for stream in streams]
 # ---------------------
 
-def start_ffmpeg(MEDIAMTX_RTSP_URL):
-    """Starts FFmpeg to ingest MJPEG from stdin and output H264 RTSP to MediaMTX."""
+
+def start_ffmpeg(rtsp_url):
     command = [
         'ffmpeg',
         '-y',
-        '-f', 'image2pipe',       # Read raw images
-        '-vcodec', 'mjpeg',       # Tell FFmpeg the input is JPEG
-        '-i', '-',                # Read from standard input
-        '-c:v', 'libx264',        # Encode to H.264 (best for WebRTC/MediaMTX compatibility)
-        '-preset', 'ultrafast',   # Favor speed over compression for live streaming
-        '-tune', 'zerolatency',   # Optimize for low latency
-        '-pix_fmt', 'yuv420p',    # Standard pixel format for H264
-        '-f', 'rtsp',             # Output as RTSP
-        MEDIAMTX_RTSP_URL
+        '-f', 'image2pipe',
+        '-vcodec', 'mjpeg',
+        '-i', '-',
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-pix_fmt', 'yuv420p',
+        '-f', 'rtsp',
+        rtsp_url
     ]
     return subprocess.Popen(command, stdin=subprocess.PIPE)
 
-def main(TCP_PORT, MEDIAMTX_RTSP_URL):
+
+def main(TCP_PORT, RTSP_URL):
+
     ffmpeg_proc = None
 
     while True:
@@ -41,50 +42,76 @@ def main(TCP_PORT, MEDIAMTX_RTSP_URL):
         server_socket.bind((TCP_IP, TCP_PORT))
         server_socket.listen(1)
 
-        print(f"Listening on port {TCP_PORT}...")
+        print(f"[{TCP_PORT}] Listening...")
+
+        conn = None
 
         try:
             conn, addr = server_socket.accept()
-            print(f"Accepted connection from {addr}")
+            print(f"[{TCP_PORT}] Connected: {addr}")
 
-            ffmpeg_proc = start_ffmpeg(MEDIAMTX_RTSP_URL)
+            # IMPORTANT: enables watchdog via timeout exceptions
+            conn.settimeout(1.0)
+
+            ffmpeg_proc = start_ffmpeg(RTSP_URL)
+            last_frame_time = time.time()
 
             while True:
-                # --- read header ---
-                length_bytes = conn.recv(4)
-                if not length_bytes or len(length_bytes) < 4:
-                    print("Client disconnected (header).")
+
+                # --- 5 second watchdog ---
+                if time.time() - last_frame_time > 5:
+                    print(f"[{TCP_PORT}] No frames for 5s → restarting FFmpeg")
                     break
+
+                try:
+                    # --- header ---
+                    length_bytes = conn.recv(4)
+                    if not length_bytes or len(length_bytes) < 4:
+                        print(f"[{TCP_PORT}] Client disconnected (header)")
+                        break
+
+                except socket.timeout:
+                    continue
 
                 frame_length = struct.unpack('<I', length_bytes)[0]
 
-                # --- read frame ---
+                # --- frame ---
                 frame_data = bytearray()
-                while len(frame_data) < frame_length:
-                    packet = conn.recv(frame_length - len(frame_data))
-                    if not packet:
-                        print("Client disconnected (frame).")
-                        break
-                    frame_data.extend(packet)
+
+                try:
+                    while len(frame_data) < frame_length:
+                        packet = conn.recv(frame_length - len(frame_data))
+
+                        if not packet:
+                            print(f"[{TCP_PORT}] Client disconnected (frame)")
+                            break
+
+                        frame_data.extend(packet)
+
+                except socket.timeout:
+                    continue
 
                 if len(frame_data) != frame_length:
-                    print("Incomplete frame → dropping connection.")
+                    print(f"[{TCP_PORT}] Incomplete frame → restart")
                     break
 
-                # --- ffmpeg write ---
+                last_frame_time = time.time()
+
+                # --- FFmpeg write ---
                 try:
                     ffmpeg_proc.stdin.write(frame_data)
                     ffmpeg_proc.stdin.flush()
                 except Exception:
-                    print("FFmpeg died → restarting connection.")
+                    print(f"[{TCP_PORT}] FFmpeg crashed → restart")
                     break
 
         except Exception as e:
-            print(f"Server error: {e}")
+            print(f"[{TCP_PORT}] Error: {e}")
 
         finally:
             try:
-                conn.close()
+                if conn:
+                    conn.close()
             except:
                 pass
 
@@ -93,11 +120,14 @@ def main(TCP_PORT, MEDIAMTX_RTSP_URL):
             except:
                 pass
 
-            if ffmpeg_proc and ffmpeg_proc.poll() is None:
-                ffmpeg_proc.stdin.close()
-                ffmpeg_proc.terminate()
+            try:
+                if ffmpeg_proc:
+                    ffmpeg_proc.kill()
+            except:
+                pass
 
-            print("Resetting and waiting for new connection...")
+            print(f"[{TCP_PORT}] Restarting stream...\n")
+
 
 if __name__ == "__main__":
 
