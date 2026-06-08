@@ -20,7 +20,7 @@ camera_fb_t *prev_frame = nullptr;
 // Global TCP client and server details
 WiFiClient tcpClient;
 const char* tcpAddress = "192.168.100.150"; // IP of the machine running the Python script
-const int tcpPort = 1242;                   // Port matching the Python script
+const int tcpPort = 1241;                   // Port matching the Python script
 
 
 
@@ -44,8 +44,8 @@ void initCamera() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
-  config.frame_size = FRAMESIZE_QVGA;; // 800 x 600
+  config.xclk_freq_hz = 10000000;
+  config.frame_size = FRAMESIZE_VGA;; // 800 x 600
   config.pixel_format = PIXFORMAT_JPEG;  // for streaming
   //config.pixel_format = PIXFORMAT_RGB565; // for face detection/recognition
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
